@@ -9,6 +9,17 @@ cor RGB, brilho, pulsação, arco-íris, desligar a luz e perfis por controle.
 
 A organização funcional é inspirada no DS4Windows, com implementação nativa para Linux.
 
+## Bateria na bandeja
+
+O ícone mostra a porcentagem do controle selecionado, com atualização a cada três
+segundos. `?` indica controle desconectado ou bateria não informada pelo driver.
+O menu do ícone tem **Abrir aplicativo** e **Sair**; clicar no ícone abre a janela.
+Fechar a janela mantém o app e os efeitos de luz ativos quando a bandeja está
+disponível. Para encerrar, use **Sair**. Sem bandeja, fechar encerra normalmente.
+
+No GNOME, ative a extensão AppIndicator/KStatusNotifierItem correspondente à sua
+distribuição (o Ubuntu normalmente já inclui Ubuntu AppIndicators).
+
 ## Perfis por controle
 
 1. Selecione o controle no topo da janela.
@@ -33,7 +44,7 @@ Alterações não salvas ficam em memória durante a sessão; use Salvar antes d
 
 - Barra de luz com prévia e efeitos animados.
 - Perfis nomeados, importação/exportação JSON e associação por controle.
-- Nome, conexão e bateria quando informados pelo driver.
+- Nome, conexão e bateria quando informados pelo driver, com porcentagem na bandeja.
 - Monitor de botões, direcionais, analógicos e gatilhos em tempo real.
 - Teste dos dois motores de vibração com duração limitada a 700 ms.
 

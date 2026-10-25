@@ -15,6 +15,8 @@ class FakeController:
         self.name = identity
     def info(self):
         return ('DualShock 4', 'USB', '80%')
+    def battery_status(self):
+        return 80, "Discharging"
     def apply(self, rgb, brightness):
         pass
 
@@ -49,4 +51,34 @@ class InterfaceTests(unittest.TestCase):
                 window.selector.setCurrentIndex(1)
                 self.assertEqual(window.color.name(), '#00ff00')
                 self.assertEqual(Profiles(store.path).bindings[b.identity], 'Vermelho')
+                window.quitting = True
                 window.close()
+
+    def test_tray_uses_selected_battery_and_unknown_on_disconnect(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Profiles(Path(directory) / 'settings.json')
+            with patch('app.Profiles', return_value=store), patch('app.discover', return_value=[]):
+                window = Window(True)
+                window.timer.stop()
+                window.scan_timer.stop()
+                window.devices = [FakeController('test')]
+                window.update_tray()
+                self.assertIn('80%', window.tray.toolTip())
+                window.devices = []
+                window.update_tray()
+                self.assertIn('Sem leitura', window.tray.toolTip())
+                window.quitting = True
+                window.close()
+
+    def test_closing_hides_when_tray_is_visible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch('app.Profiles', return_value=Profiles(Path(directory) / 'settings.json')):
+                window = Window(True)
+                window.show()
+                with patch.object(window.tray, 'isVisible', return_value=True):
+                    window.close()
+                    self.assertFalse(window.isVisible())
+                    self.assertTrue(window.timer.isActive())
+                window.quitting = True
+                window.close()
+                self.assertFalse(window.timer.isActive())

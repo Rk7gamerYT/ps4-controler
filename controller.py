@@ -27,6 +27,17 @@ class Lightbar:
         # Fallback is explicitly port-specific when hardware provides no serial.
         return 'port:' + str(self.hid_path)
 
+    def battery_status(self):
+        for supply in self.hid_path.glob('power_supply/*'):
+            try:
+                percent = int((supply / 'capacity').read_text())
+                state = (supply / 'status').read_text().strip()
+                if 0 <= percent <= 100:
+                    return percent, state
+            except (OSError, ValueError):
+                continue
+        return None, 'Bateria não informada'
+
     def info(self):
         root = self.hid_path
         data = dict(line.split('=', 1) for line in (root / 'uevent').read_text().splitlines() if '=' in line)

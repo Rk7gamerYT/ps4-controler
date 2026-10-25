@@ -13,6 +13,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QApplication, QComboBox, QColorDialog, QFormLayout,
     QHBoxLayout, QLabel, QMainWindow, QPushButton, QSlider, QVBoxLayout, QWidget,
     QTabWidget, QInputDialog, QFileDialog, QMessageBox, QProgressBar)
+from battery_tray import BatteryTray
 from controller import discover
 from profiles import CONFIG, Profiles, normalize
 from input_device import Gamepad, BUTTONS, AXES
@@ -23,6 +24,8 @@ from input_device import Gamepad, BUTTONS, AXES
 class Window(QMainWindow):
     def __init__(self, demo=False):
         super().__init__()
+        self.quitting = False
+        self.tray = None
         self.demo = demo
         self.devices = []
         self.store = Profiles()
@@ -119,6 +122,8 @@ class Window(QMainWindow):
         self.scan_timer = QTimer(self)
         self.scan_timer.timeout.connect(self.refresh)
         self.scan_timer.start(3000)
+        self.tray = BatteryTray('PS4 Control', self.show_window, self.quit_app, self)
+        self.update_tray()
 
     def build_monitor(self):
         page = QWidget()
@@ -283,7 +288,31 @@ class Window(QMainWindow):
         except (OSError, ValueError) as exc:
             self.input_status.setText(f'Entradas indisponíveis: {exc}. Consulte as permissões no README.')
 
+    def show_window(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def quit_app(self):
+        self.quitting = True
+        self.close()
+        QApplication.instance().quit()
+
+    def update_tray(self):
+        if self.tray is None:
+            return
+        percent, state = None, 'Controle desconectado'
+        if self.devices:
+            device = self.devices[max(0, self.selector.currentIndex())]
+            try:
+                percent, state = device.battery_status()
+                state = f'{device.name} • {state}'
+            except OSError:
+                state = 'Leitura temporariamente indisponível'
+        self.tray.update_battery(percent, state, 'Charging' in state and 'Discharging' not in state)
+
     def update_info(self):
+        self.update_tray()
         if self.devices:
             try:
                 name, connection, battery = self.devices[max(0, self.selector.currentIndex())].info()
@@ -408,6 +437,10 @@ class Window(QMainWindow):
                 self.light_error.setText(f'Não foi possível ajustar a luz: {exc}')
 
     def closeEvent(self, event):
+        if self.tray is not None and self.tray.isVisible() and not self.quitting:
+            self.hide()
+            event.ignore()
+            return
         self.timer.stop()
         if self.gamepad:
             self.gamepad.close()
