@@ -9,16 +9,44 @@ import sys
 import time
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QApplication, QComboBox, QColorDialog, QFormLayout,
-    QHBoxLayout, QLabel, QMainWindow, QPushButton, QSlider, QVBoxLayout, QWidget,
-    QTabWidget, QInputDialog, QFileDialog, QMessageBox, QProgressBar)
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QShortcut
+from PySide6.QtWidgets import (QApplication, QComboBox, QColorDialog, QFrame,
+    QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QPushButton, QSlider,
+    QVBoxLayout, QWidget, QTabWidget, QInputDialog, QFileDialog, QMessageBox, QProgressBar, QScrollArea, QLayout, QSizePolicy)
 from battery_tray import BatteryTray
+from theme import PALETTES, load_theme, save_theme, stylesheet
+from widgets import BatteryBar, ControllerView, SwatchRow
 from controller import discover
 from profiles import CONFIG, Profiles, normalize
 from input_device import Gamepad, BUTTONS, AXES
+from evdev import ecodes as e
 
 
+
+
+def card(title=None):
+    frame = QFrame()
+    frame.setObjectName('card')
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(20, 16, 20, 18)
+    layout.setSpacing(10)
+    if title:
+        label = QLabel(title.upper())
+        label.setObjectName('section')
+        layout.addWidget(label)
+    return frame, layout
+
+
+def slider_row(slider, suffix='%'):
+    row = QHBoxLayout()
+    value = QLabel()
+    value.setObjectName('value')
+    value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    slider.valueChanged.connect(lambda v: value.setText(f'{v}{suffix}'))
+    value.setText(f'{slider.value()}{suffix}')
+    row.addWidget(slider, 1)
+    row.addWidget(value)
+    return row
 
 
 class Window(QMainWindow):
@@ -33,88 +61,67 @@ class Window(QMainWindow):
         self.selected_identity = None
         self.permission_process = None
         self.last_output = None
+        self.theme = load_theme()
         self.color = QColor('#547cff')
         self.started = time.monotonic()
         self.setWindowTitle('PS4 Control • Linux')
-        self.resize(780, 730)
+        self.resize(1180, 820)
         body = QWidget()
         self.setCentralWidget(body)
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(32, 28, 32, 28)
-        title = QLabel('PS4 Control')
-        title.setStyleSheet('font-size:30px; font-weight:700')
-        layout.addWidget(title)
-        layout.addWidget(QLabel('Controles, perfis e personalização no Linux'))
-        row = QHBoxLayout()
-        self.selector = QComboBox()
-        row.addWidget(self.selector, 1)
-        refresh = QPushButton('Buscar controle')
-        refresh.clicked.connect(self.retry_controller)
-        row.addWidget(refresh)
-        layout.addLayout(row)
-        profile_row = QHBoxLayout()
-        self.profile = QComboBox()
-        self.profile.addItems(self.store.items)
-        self.profile.setCurrentText(self.store.active)
-        profile_row.addWidget(QLabel('Perfil deste controle'))
-        profile_row.addWidget(self.profile, 1)
-        for text, handler in [('Novo', self.new_profile), ('Excluir', self.delete_profile),
-                              ('Importar', self.import_profile), ('Exportar', self.export_profile)]:
-            button = QPushButton(text)
-            button.clicked.connect(handler)
-            profile_row.addWidget(button)
-        layout.addLayout(profile_row)
+        shell = QHBoxLayout(body)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
+        shell.addWidget(self.build_sidebar())
+        content = QWidget()
+        content.setObjectName('workspace')
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(content)
+        shell.addWidget(scroll, 1)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(28, 22, 28, 18)
+        layout.setSpacing(14)
+        layout.addLayout(self.build_header())
+        layout.addWidget(self.build_device_card())
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
-        light = QWidget()
-        light_layout = QVBoxLayout(light)
-        self.tabs.addTab(light, 'Barra de luz')
-        self.preview = QLabel('DUALSHOCK 4')
-        self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setMinimumHeight(100)
-        light_layout.addWidget(self.preview)
-        form = QFormLayout()
-        self.color_button = QPushButton('Escolher cor')
-        self.color_button.clicked.connect(self.choose_color)
-        form.addRow('Cor da luz', self.color_button)
-        self.brightness = QSlider(Qt.Horizontal)
-        self.brightness.setRange(0, 100)
-        self.brightness.setValue(70)
-        form.addRow('Brilho', self.brightness)
-        self.effect = QComboBox()
-        self.effect.addItems(['Fixa', 'Pulsação', 'Arco-íris', 'Desligada'])
-        form.addRow('Efeito', self.effect)
-        self.speed = QSlider(Qt.Horizontal)
-        self.speed.setRange(1, 100)
-        self.speed.setValue(35)
-        form.addRow('Velocidade', self.speed)
-        light_layout.addLayout(form)
-        light_layout.addStretch()
+        self.build_light_tab()
         self.build_monitor()
-        self.status = QLabel()
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
+        self.build_profiles_tab()
+        self.tabs.tabBar().hide()
+        self.navigation.currentRowChanged.connect(self.navigate)
+        self.navigation.setCurrentRow(0)
         self.error = QLabel()
-        self.error.setWordWrap(True)
-        self.error.setStyleSheet('color:#ffbc91')
+        self.error.setObjectName('error')
         self.light_error = QLabel()
-        self.light_error.setWordWrap(True)
-        self.light_error.setStyleSheet('color:#ffbc91')
-        layout.addWidget(self.light_error)
-        layout.addWidget(self.error)
+        self.light_error.setObjectName('error')
+        for label in (self.error, self.light_error):
+            label.setWordWrap(True)
+            label.hide()
+            layout.addWidget(label)
         self.permissions_button = QPushButton('Liberar acesso à luz…')
         self.permissions_button.clicked.connect(self.grant_light_access)
+        self.permissions_button.hide()
         layout.addWidget(self.permissions_button)
-        layout.addStretch()
-        save = QPushButton('Salvar preferências')
-        save.clicked.connect(self.save)
-        layout.addWidget(save)
-        layout.addWidget(QLabel('Os efeitos animados funcionam enquanto o app estiver aberto.'))
+        footer = QHBoxLayout()
+        self.status = QLabel()
+        self.status.setObjectName('status')
+        self.status.setWordWrap(True)
+        footer.addWidget(self.status, 1)
+        self.save_button = QPushButton('Salvar perfil')
+        self.save_button.setObjectName('primary')
+        self.save_button.setToolTip('Salvar perfil e associação ao controle • Ctrl+S')
+        self.save_button.clicked.connect(self.save)
+        footer.addWidget(self.save_button)
+        layout.addLayout(footer)
+        QShortcut(QKeySequence.Save, self, activated=self.save)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.apply_profile(self.store.active)
         self.profile.currentTextChanged.connect(self.change_profile)
         self.selector.currentIndexChanged.connect(self.select_controller)
+        self.apply_theme(self.theme, persist=False)
         self.refresh()
         if self.store.error:
             self.error.setText(self.store.error)
@@ -125,40 +132,285 @@ class Window(QMainWindow):
         self.tray = BatteryTray('PS4 Control', self.show_window, self.quit_app, self)
         self.update_tray()
 
-    def build_monitor(self):
-        page = QWidget()
-        form = QFormLayout(page)
+    # ---- construção da interface -------------------------------------------------
+    def build_sidebar(self):
+        sidebar = QFrame()
+        sidebar.setObjectName('sidebar')
+        sidebar.setFixedWidth(204)
+        column = QVBoxLayout(sidebar)
+        column.setContentsMargins(18, 28, 18, 22)
+        column.setSpacing(14)
+        logo = QLabel()
+        logo.setPixmap(QIcon(str(Path(__file__).with_name('assets') / 'icon.svg')).pixmap(52, 52))
+        column.addWidget(logo)
+        brand = QLabel('PS4 Control')
+        brand.setObjectName('brand')
+        column.addWidget(brand)
+        subtitle = QLabel('SEU CONTROLE.\nDO SEU JEITO.')
+        subtitle.setObjectName('section')
+        column.addWidget(subtitle)
+        column.addSpacing(26)
+        self.navigation = QListWidget()
+        self.navigation.setObjectName('navigation')
+        self.navigation.addItems(['Barra de luz', 'Teste de entradas', 'Vibração', 'Meus perfis'])
+        self.navigation.setSpacing(5)
+        self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        column.addWidget(self.navigation, 1)
+        foot = QLabel('DUALSHOCK 4\nUSB + Bluetooth')
+        foot.setObjectName('muted')
+        column.addWidget(foot)
+        return sidebar
+
+    def navigate(self, index):
+        if index < 0:
+            return
+        self.tabs.setCurrentIndex(index)
+        self.page_title.setText(['Sua luz, sua identidade', 'Cada movimento em tempo real',
+                                 'Sinta o controle', 'Pronto para cada jogo'][index])
+        self.page_subtitle.setText(['Escolha uma cor e veja seu DualShock 4 ganhar vida.',
+            'Confira os botões, gatilhos e analógicos do controle selecionado.',
+            'Ajuste a intensidade e teste os dois motores de vibração.',
+            'Organize seus ajustes e associe um perfil a cada controle.'][index])
+
+    def build_header(self):
+        row = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(0)
+        title = QLabel('Sua luz, sua identidade')
+        self.page_title = title
+        title.setObjectName('title')
+        subtitle = QLabel('Escolha uma cor e veja seu DualShock 4 ganhar vida.')
+        self.page_subtitle = subtitle
+        subtitle.setWordWrap(True)
+        subtitle.setObjectName('subtitle')
+        titles.addWidget(title)
+        titles.addWidget(subtitle)
+        row.addLayout(titles, 1)
+        self.theme_button = QPushButton()
+        self.theme_button.setObjectName('ghost')
+        self.theme_button.setToolTip('Alternar entre tema escuro e claro')
+        self.theme_button.clicked.connect(lambda: self.apply_theme('light' if self.theme == 'dark' else 'dark'))
+        row.addWidget(self.theme_button)
+        return row
+
+    def build_device_card(self):
+        frame, outer = card()
+        outer.setSpacing(12)
+        top = QHBoxLayout()
+        self.selector = QComboBox()
+        self.selector.setMinimumWidth(180)
+        self.selector.setToolTip('Controle que recebe os ajustes deste perfil')
+        top.addWidget(self.selector, 1)
+        refresh = QPushButton('Buscar controle')
+        refresh.clicked.connect(self.retry_controller)
+        top.addWidget(refresh)
+        top.addSpacing(10)
+        top.addWidget(QLabel('Perfil'))
+        self.profile = QComboBox()
+        self.profile.addItems(self.store.items)
+        self.profile.setCurrentText(self.store.active)
+        self.profile.setMinimumWidth(130)
+        top.addWidget(self.profile)
+        outer.addLayout(top)
+        info = QHBoxLayout()
+        info.setSpacing(16)
+        self.connection_label = QLabel('Desconectado')
+        self.connection_label.setObjectName('muted')
         self.device_info = QLabel('Nenhum controle selecionado')
         self.device_info.setWordWrap(True)
-        form.addRow('Dispositivo', self.device_info)
+        info.addWidget(self.device_info, 1)
+        info.addWidget(self.connection_label)
+        self.battery_bar = BatteryBar(self.theme)
+        info.addWidget(self.battery_bar)
+        outer.addLayout(info)
+        return frame
+
+    def build_light_tab(self):
+        page = QWidget()
+        row = QHBoxLayout(page)
+        row.setContentsMargins(0, 4, 0, 0)
+        row.setSpacing(14)
+        preview_card, pl = card('Seu DualShock 4')
+        preview_card.setObjectName('hero')
+        self.preview = ControllerView(self.theme, show_inputs=False)
+        pl.addWidget(self.preview, 1)
+        self.light_caption = QLabel()
+        self.light_caption.setObjectName('pill')
+        self.light_caption.setAlignment(Qt.AlignCenter)
+        pl.addWidget(self.light_caption)
+        row.addWidget(preview_card, 5)
+        controls, cl = card('Personalizar luz')
+        controls.setMinimumWidth(350)
+        cl.addWidget(QLabel('Cor'))
+        swatches = SwatchRow()
+        swatches.picked.connect(self.pick_preset)
+        cl.addWidget(swatches)
+        self.color_button = QPushButton('Escolher cor')
+        self.color_button.clicked.connect(self.choose_color)
+        cl.addWidget(self.color_button)
+        cl.addSpacing(6)
+        cl.addWidget(QLabel('Brilho'))
+        self.brightness = QSlider(Qt.Horizontal)
+        self.brightness.setRange(0, 100)
+        self.brightness.setValue(70)
+        cl.addLayout(slider_row(self.brightness))
+        cl.addWidget(QLabel('Efeito'))
+        self.effect = QComboBox()
+        self.effect.addItems(['Fixa', 'Pulsação', 'Arco-íris', 'Desligada'])
+        cl.addWidget(self.effect)
+        self.speed_label = QLabel('Velocidade do efeito')
+        cl.addWidget(self.speed_label)
+        self.speed = QSlider(Qt.Horizontal)
+        self.speed.setRange(1, 100)
+        self.speed.setValue(35)
+        cl.addLayout(slider_row(self.speed))
+        cl.addStretch()
+        row.addWidget(controls, 4)
+        self.tabs.addTab(page, 'Barra de luz')
+
+    def build_monitor(self):
+        page = QWidget()
+        row = QHBoxLayout(page)
+        row.setContentsMargins(0, 4, 0, 0)
+        row.setSpacing(14)
+        pad_card, pl = card('Teste de entradas')
+        self.pad = ControllerView(self.theme)
+        pl.addWidget(self.pad, 1)
         self.input_status = QLabel('Conecte um controle para testar as entradas.')
+        self.input_status.setObjectName('muted')
         self.input_status.setWordWrap(True)
-        form.addRow(self.input_status)
+        self.input_status.setAlignment(Qt.AlignCenter)
+        pl.addWidget(self.input_status)
+        row.addWidget(pad_card, 5)
+        values, vl = card('Valores em tempo real')
+        vl.addWidget(QLabel('Botões pressionados'))
         self.pressed = QLabel('—')
         self.pressed.setWordWrap(True)
-        form.addRow('Botões pressionados', self.pressed)
+        self.pressed.setStyleSheet('font-size:18px;font-weight:700')
+        vl.addWidget(self.pressed)
         self.axis_bars = {}
         for code, label in AXES.items():
+            line = QHBoxLayout()
+            name = QLabel(label)
+            name.setMinimumWidth(130)
             bar = QProgressBar()
             bar.setRange(0, 100)
             bar.setValue(0)
-            form.addRow(label, bar)
+            bar.setFormat('—')
+            line.addWidget(name)
+            line.addWidget(bar, 1)
+            vl.addLayout(line)
             self.axis_bars[code] = bar
-        self.tabs.addTab(page, 'Controle e entradas')
+        vl.addStretch()
+        row.addWidget(values, 4)
+        self.tabs.addTab(page, 'Entradas')
         rumble = QWidget()
-        rf = QFormLayout(rumble)
+        rl = QVBoxLayout(rumble)
+        rl.setContentsMargins(0, 4, 0, 0)
+        rcard, rc = card('Teste de vibração')
         self.strong = QSlider(Qt.Horizontal)
         self.weak = QSlider(Qt.Horizontal)
-        for label, slider in [('Motor forte', self.strong), ('Motor suave', self.weak)]:
+        for label, slider in [('Motor forte (esquerda)', self.strong), ('Motor suave (direita)', self.weak)]:
             slider.setRange(0, 100)
             slider.setValue(50)
-            rf.addRow(label, slider)
+            rc.addWidget(QLabel(label))
+            rc.addLayout(slider_row(slider))
         self.test_rumble = QPushButton('Testar vibração • 0,7 segundo')
+        self.test_rumble.setObjectName('primary')
         self.test_rumble.clicked.connect(self.rumble)
         self.test_rumble.setEnabled(False)
-        rf.addRow(self.test_rumble)
-        rf.addRow(QLabel('As intensidades são salvas no perfil e usadas neste teste.'))
+        rc.addWidget(self.test_rumble)
+        note = QLabel('As intensidades são salvas no perfil e usadas neste teste.')
+        note.setObjectName('muted')
+        rc.addWidget(note)
+        rl.addWidget(rcard)
+        rl.addStretch()
         self.tabs.addTab(rumble, 'Vibração')
+
+    def build_profiles_tab(self):
+        page = QWidget()
+        row = QHBoxLayout(page)
+        row.setContentsMargins(0, 4, 0, 0)
+        row.setSpacing(14)
+        listing, ll = card('Seus perfis')
+        self.profile_list = QListWidget()
+        self.profile_list.currentTextChanged.connect(self.pick_listed_profile)
+        ll.addWidget(self.profile_list, 1)
+        row.addWidget(listing, 4)
+        actions, al = card('Gerenciar')
+        self.profile_summary = QLabel()
+        self.profile_summary.setWordWrap(True)
+        al.addWidget(self.profile_summary)
+        for text, handler, name in [('Novo perfil (copia os ajustes atuais)', self.new_profile, ''),
+                                    ('Duplicar', self.duplicate_profile, ''),
+                                    ('Renomear', self.rename_profile, ''),
+                                    ('Importar de arquivo…', self.import_profile, ''),
+                                    ('Exportar para arquivo…', self.export_profile, ''),
+                                    ('Excluir perfil', self.delete_profile, 'danger')]:
+            button = QPushButton(text)
+            if name:
+                button.setObjectName(name)
+            button.clicked.connect(handler)
+            al.addWidget(button)
+        al.addStretch()
+        note = QLabel('Perfis podem ser compartilhados por vários controles; editar um perfil altera todos que o usam.')
+        note.setObjectName('muted')
+        note.setWordWrap(True)
+        al.addWidget(note)
+        row.addWidget(actions, 4)
+        self.tabs.addTab(page, 'Perfis')
+
+    # ---- tema e cartão de status ---------------------------------------------------
+    def apply_theme(self, name, persist=True):
+        self.theme = name
+        QApplication.instance().setStyleSheet(stylesheet(name))
+        self.theme_button.setText('☀  Tema claro' if name == 'dark' else '☾  Tema escuro')
+        for widget in (self.preview, self.pad, self.battery_bar):
+            widget.set_theme(name)
+        if persist:
+            save_theme(name)
+
+    def update_status_card(self, percent, state, name, connection):
+        self.battery_bar.set_value(percent, 'Charging' in state and 'Discharging' not in state)
+        self.connection_label.setText(f'● {connection}')
+        self.connection_label.setStyleSheet(f"color:{PALETTES[self.theme]['ok']}")
+        self.device_info.setText(f'{name}\n{state}')
+
+    def clear_status_card(self):
+        self.battery_bar.set_value(None)
+        self.connection_label.setText('○ Desconectado')
+        self.connection_label.setStyleSheet('')
+        self.device_info.setText('Prévia visual' if self.demo else 'Nenhum controle selecionado')
+
+    def refresh_profile_list(self):
+        self.profile_list.blockSignals(True)
+        self.profile_list.clear()
+        users = {}
+        for profile in self.store.bindings.values():
+            users[profile] = users.get(profile, 0) + 1
+        for name in self.store.items:
+            count = users.get(name, 0)
+            item = QListWidgetItem(f"{name}   ·   {count} controle{'s' if count != 1 else ''}" if count else name)
+            item.setData(Qt.UserRole, name)
+            self.profile_list.addItem(item)
+            if name == self.store.active:
+                self.profile_list.setCurrentItem(item)
+        self.profile_list.blockSignals(False)
+        data = self.store.items.get(self.store.active)
+        if data:
+            effect = ['Fixa', 'Pulsação', 'Arco-íris', 'Desligada'][data['effect']]
+            self.profile_summary.setText(f"Perfil ativo: {self.store.active}\nCor {data['color'].upper()} • {effect} • brilho {data['brightness']}%")
+
+    def pick_listed_profile(self, _):
+        item = self.profile_list.currentItem()
+        name = item.data(Qt.UserRole) if item else None
+        if name and name != self.store.active:
+            self.change_profile(name)
+
+    def pick_preset(self, color):
+        self.color = QColor(color)
+        if self.effect.currentIndex() in (2, 3):
+            self.effect.setCurrentIndex(0)
 
     def values(self):
         return dict(color=self.color.name(), brightness=self.brightness.value(),
@@ -175,6 +427,7 @@ class Window(QMainWindow):
         self.profile.blockSignals(True)
         self.profile.setCurrentText(name)
         self.profile.blockSignals(False)
+        self.refresh_profile_list()
 
     def remember_edits(self):
         self.store.items[self.store.active] = self.values()
@@ -205,6 +458,33 @@ class Window(QMainWindow):
                 raise ValueError('Já existe um perfil com esse nome.')
             self.remember_edits()
             self.store.items[name] = self.values()
+            self.sync_profiles(name)
+        except ValueError as exc:
+            self.error.setText(str(exc))
+
+    def duplicate_profile(self):
+        name = f'{self.store.active} (cópia)'
+        number = 2
+        while name in self.store.items:
+            name = f'{self.store.active} (cópia {number})'
+            number += 1
+        self.remember_edits()
+        self.store.items[name] = self.values()
+        self.sync_profiles(name)
+        self.status.setText(f'Perfil duplicado como “{name}”.')
+
+    def rename_profile(self):
+        old = self.store.active
+        name, ok = QInputDialog.getText(self, 'Renomear perfil', 'Novo nome:', text=old)
+        if not ok:
+            return
+        try:
+            name = self.store.valid_name(name)
+            if name != old and name in self.store.items:
+                raise ValueError('Já existe um perfil com esse nome.')
+            self.remember_edits()
+            self.store.items = {(name if key == old else key): value for key, value in self.store.items.items()}
+            self.store.bindings = {key: (name if value == old else value) for key, value in self.store.bindings.items()}
             self.sync_profiles(name)
         except ValueError as exc:
             self.error.setText(str(exc))
@@ -253,6 +533,8 @@ class Window(QMainWindow):
             self.store.bindings[self.selected_identity] = self.store.active
         try:
             self.store.save()
+            self.refresh_profile_list()
+            self.error.clear()
             self.status.setText('Perfil salvo e associado ao controle selecionado.' if self.selected_identity
                                 else 'Perfil salvo. Selecione um controle para associá-lo.')
         except OSError as exc:
@@ -267,11 +549,12 @@ class Window(QMainWindow):
         self.selected_identity = None
         self.test_rumble.setEnabled(False)
         self.pressed.setText('—')
+        self.pad.clear_state()
         for bar in self.axis_bars.values():
             bar.setValue(0)
             bar.setFormat('—')
         if not self.devices:
-            self.device_info.setText('Prévia visual' if self.demo else 'Nenhum controle selecionado')
+            self.clear_status_card()
             self.input_status.setText('Conecte um controle para testar as entradas.')
             return
         device = self.devices[max(0, self.selector.currentIndex())]
@@ -315,10 +598,14 @@ class Window(QMainWindow):
         self.update_tray()
         if self.devices:
             try:
-                name, connection, battery = self.devices[max(0, self.selector.currentIndex())].info()
-                self.device_info.setText(f'{name} • {connection}\nBateria: {battery}')
+                device = self.devices[max(0, self.selector.currentIndex())]
+                name, connection, _ = device.info()
+                percent, state = device.battery_status()
+                self.update_status_card(percent, state, name, connection)
             except (OSError, ValueError):
                 self.device_info.setText('Informações temporariamente indisponíveis')
+        else:
+            self.clear_status_card()
 
     def rumble(self):
         if self.gamepad:
@@ -333,15 +620,20 @@ class Window(QMainWindow):
         try:
             keys, axes = self.gamepad.poll()
             self.pressed.setText('  '.join(BUTTONS.get(key, str(key)) for key in sorted(keys)) or '—')
+            levels = {}
             for code, info in axes.items():
                 bar = self.axis_bars[code]
-                bar.setValue(round(100 * (info.value - info.min) / max(1, info.max - info.min)))
+                level = (info.value - info.min) / max(1, info.max - info.min)
+                levels[code] = info.value if code in (e.ABS_HAT0X, e.ABS_HAT0Y) else level
+                bar.setValue(round(100 * level))
                 bar.setFormat(str(info.value))
+            self.pad.set_state(keys, levels)
         except OSError as exc:
             self.input_status.setText(f'Leitura interrompida: {exc}. Use Buscar controle para tentar novamente.')
             self.gamepad.close()
             self.gamepad = None
             self.test_rumble.setEnabled(False)
+            self.pad.clear_state()
 
     def grant_light_access(self):
         if not self.devices or self.permission_process:
@@ -407,7 +699,11 @@ class Window(QMainWindow):
 
     def tick(self):
         self.check_permissions()
-        self.permissions_button.setVisible(bool(self.devices))
+        needs_access = bool(self.devices) and any(not os.access(path, os.W_OK)
+            for path in getattr(self.devices[max(0, self.selector.currentIndex())], 'permission_files', []))
+        self.permissions_button.setVisible(needs_access or self.permission_process is not None)
+        self.error.setVisible(bool(self.error.text()))
+        self.light_error.setVisible(bool(self.light_error.text()))
         self.poll_inputs()
         elapsed = time.monotonic() - self.started
         period = 0.5 + (100 - self.speed.value()) / 15
@@ -421,9 +717,11 @@ class Window(QMainWindow):
         elif effect == 3:
             brightness = 0
         shown = QColor(*(round(c * brightness) for c in rgb)).name()
-        self.preview.setStyleSheet(f'background:{shown}; border-radius:18px; color:white; font-weight:700; letter-spacing:4px')
-        self.color_button.setText(self.color.name().upper() + ' • Escolher cor')
+        self.preview.set_light(shown)
+        self.light_caption.setText(f"{self.color.name().upper()} • {['Fixa', 'Pulsação', 'Arco-íris', 'Desligada'][effect]}")
+        self.color_button.setText(self.color.name().upper() + ' • Outra cor…')
         self.speed.setEnabled(effect in (1, 2))
+        self.speed_label.setText('Velocidade do efeito' if effect in (1, 2) else 'Velocidade • escolha um efeito animado')
         if self.devices:
             try:
                 output = (tuple(rgb), round(brightness * 255))
@@ -456,12 +754,11 @@ class Window(QMainWindow):
 
 def create_application():
     app = QApplication(sys.argv)
+    app.setApplicationName('ps4-control')
+    app.setDesktopFileName('ps4-control')
+    app.setWindowIcon(QIcon(str(Path(__file__).with_name('assets') / 'icon.svg')))
     app.setStyle('Fusion')
-    app.setStyleSheet('''QWidget {background:#101522;color:#e4eaf9;font-size:14px}
-        QPushButton,QComboBox {background:#222d46;border:1px solid #3b4a6b;border-radius:8px;padding:10px}
-        QPushButton:hover {background:#33486f} QLabel {background:transparent}
-        QSlider::groove:horizontal {height:6px;background:#303d59;border-radius:3px}
-        QSlider::handle:horizontal {background:#7e9cff;width:18px;margin:-6px 0;border-radius:9px}''')
+    app.setStyleSheet(stylesheet('dark'))
     return app
 
 

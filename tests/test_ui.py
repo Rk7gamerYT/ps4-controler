@@ -82,3 +82,22 @@ class InterfaceTests(unittest.TestCase):
                 window.quitting = True
                 window.close()
                 self.assertFalse(window.timer.isActive())
+
+    def test_duplicate_and_rename_keep_bindings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Profiles(Path(directory) / 'settings.json')
+            store.bindings = {'sony-ds4:aa': 'Padrão'}
+            with patch('app.Profiles', return_value=store), patch('app.discover', return_value=[]), \
+                    patch('app.QInputDialog.getText', return_value=('Jogos', True)):
+                window = Window(True)
+                window.timer.stop()
+                window.scan_timer.stop()
+                window.duplicate_profile()
+                self.assertIn('Padrão (cópia)', store.items)
+                window.change_profile('Padrão')
+                window.rename_profile()
+                self.assertIn('Jogos', store.items)
+                self.assertEqual(store.bindings['sony-ds4:aa'], 'Jogos')
+                self.assertEqual(store.active, 'Jogos')
+                window.quitting = True
+                window.close()

@@ -4,6 +4,8 @@
 
 Projeto de código aberto sob a [licença MIT](LICENSE).
 
+![Interface do PS4 Control](preview.png)
+
 App nativo em português para configurar a barra de luz do DualShock 4:
 cor RGB, brilho, pulsação, arco-íris, desligar a luz e perfis por controle.
 
@@ -23,9 +25,9 @@ distribuição (o Ubuntu normalmente já inclui Ubuntu AppIndicators).
 ## Perfis por controle
 
 1. Selecione o controle no topo da janela.
-2. Crie um perfil em **Novo** ou escolha um perfil existente.
+2. Em **Meus perfis**, crie um perfil em **Novo** ou escolha um perfil existente.
 3. Ajuste a luz e as intensidades do teste de vibração.
-4. Clique em **Salvar preferências** para salvar os ajustes e associar o perfil ao controle selecionado.
+4. Clique em **Salvar perfil** (ou Ctrl+S) para salvar os ajustes e associar o perfil ao controle selecionado.
 
 Ao selecionar novamente ou reconectar o controle, o perfil associado é carregado.
 A associação usa `HID_UNIQ` (normalizado), quando disponível, permitindo reconhecer
@@ -40,12 +42,20 @@ do DS4Windows. **Excluir** remove também as associações àquele perfil.
 A luz e a leitura de entradas são controladas apenas para o controle selecionado.
 Alterações não salvas ficam em memória durante a sessão; use Salvar antes de fechar.
 
+## Interface
+
+- Cabeçalho com seleção de controle e perfil, status de conexão e barra de bateria.
+- Navegação lateral: **Barra de luz**, **Teste de entradas**, **Vibração** e **Meus perfis**.
+- Desenho vetorial do controle com acabamento preto, touchpad texturizado e botões animados.
+- Tema escuro/claro (botão no topo; a escolha fica em `~/.config/ps4-controler/ui.json`).
+- Atalho **Ctrl+S** para salvar.
+
 ## Recursos nesta versão
 
-- Barra de luz com prévia e efeitos animados.
-- Perfis nomeados, importação/exportação JSON e associação por controle.
+- Barra de luz com prévia ao vivo no desenho do controle, cores rápidas e efeitos animados.
+- Perfis nomeados (novo, duplicar, renomear, excluir), importação/exportação JSON e associação por controle.
 - Nome, conexão e bateria quando informados pelo driver, com porcentagem na bandeja.
-- Monitor de botões, direcionais, analógicos e gatilhos em tempo real.
+- Teste visual de botões, direcional, analógicos e gatilhos em tempo real, com valores numéricos.
 - Teste dos dois motores de vibração com duração limitada a 700 ms.
 
 ## Próximas funções baseadas no DS4Windows
@@ -115,7 +125,7 @@ Isso libera apenas os dois atributos da luz até desconectar/reiniciar. Não use
 ## Permissões de entradas e vibração
 
 O monitor usa apenas o nó de gamepad do HID selecionado, sem capturar o controle
-com acesso exclusivo. Falhas de permissão aparecem na aba **Controle e entradas**.
+com acesso exclusivo. Falhas de permissão aparecem na seção **Teste de entradas**.
 O teste de vibração precisa de acesso de escrita ao mesmo `/dev/input/eventN`.
 
 Para identificar o nó, use `ls -l /sys/class/leds/NOME-EXATO-DO-LED/device/input/input*/event*`.
@@ -146,3 +156,7 @@ Referência do driver: https://github.com/torvalds/linux/blob/master/drivers/hid
 ## Contribuições
 
 Veja [CONTRIBUTING.md](CONTRIBUTING.md). O projeto é independente e não é afiliado à Sony ou ao DS4Windows.
+
+## Ícone e atalho no menu
+
+Execute `python3 install-menu.py` para instalar o ícone e o atalho somente para o usuário atual. Procure PS4 Control no menu de aplicativos. O ícone da janela é atualizado ao reabrir o app.
